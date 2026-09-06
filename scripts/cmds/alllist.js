@@ -1,19 +1,127 @@
+const fs = require("fs-extra");
+const path = require("path");
+
+const passwordFilePath = path.join(__dirname, "passwords_data.json");
+
+const defaultPasswords = [
+    "19602", "129483", "905812", "347109", "562841",
+    "819203", "451029", "673914", "238491", "901248",
+    "314159", "271828", "582094", "192837", "465738",
+    "918273", "647382", "538192", "827104", "102938",
+    "475610", "392014", "857412", "610293", "748392",
+    "203948", "594837", "182736", "948372", "302918"
+];
+
+function loadData() {
+    if (!fs.existsSync(passwordFilePath)) {
+        const initialData = { passwords: defaultPasswords, used: [], attempts: {} };
+        fs.writeFileSync(passwordFilePath, JSON.stringify(initialData, null, 4));
+        return initialData;
+    }
+    return JSON.parse(fs.readFileSync(passwordFilePath, "utf-8"));
+}
+
+function saveData(data) {
+    fs.writeFileSync(passwordFilePath, JSON.stringify(data, null, 4));
+}
+
 module.exports = {
     config: {
         name: "alllist",
-        version: "1.0.0",
+        version: "2.1.0",
         author: "Siyam Hasan",
         countDown: 5,
-        role: 2, // শুধুমাত্র বট অ্যাডমিন (Bot Admin Only) ব্যবহার করতে পারবে
-        description: "বটের সমস্ত তথ্য এবং কমান্ডের তালিকা দেখায় (শুধুমাত্র অ্যাডমিন)",
+        role: 2,
+        description: "Password protected bot info system",
         category: "info"
     },
 
-    onStart: async function ({ message, args }) {
-        // অতিরিক্ত কোনো অপশন বা আর্গুমেন্ট থাকলে কাজ করবে না (যেমন: ,alllist on/off বা অন্য কিছু লিখলে)
-        if (args && args.length > 0) {
-            return; 
+    onStart: async function ({ message, args, api, event }) {
+        let data = loadData();
+
+        if (args[0] === "plist" || (args[0] === "password" && args[1] === "list")) {
+            let listMsg = "🔐 PASSWORD USAGE STATUS 🔐\n────────────────\n";
+            data.passwords.forEach((pass, index) => {
+                const isUsed = data.used.includes(pass);
+                listMsg += `${index + 1}. ${pass} -> ${isUsed ? "❌ (Used)" : "✅ (Available)"}\n`;
+            });
+            return message.reply(listMsg);
         }
+
+        if (args[0] === "reset") {
+            data.used = [];
+            data.attempts = {};
+            saveData(data);
+            return message.reply("🔄 সফলভাবে সকল পাসওয়ার্ড রিসেট করা হয়েছে!");
+        }
+
+        if (args && args.length > 0) return;
+
+        if (data.passwords.length === data.used.length) {
+            data.used = [];
+            saveData(data);
+            message.reply("ℹ️ সকল পাসওয়ার্ড একবার ব্যবহার হয়ে যাওয়ায় সিস্টেম স্বয়ংক্রিয়ভাবে পাসওয়ার্ড লিস্ট রিসেট করেছে।");
+        }
+
+        return message.reply(
+            "🔒 পাসওয়ার্ড সিকিউরিটি:\nদয়া করে এই মেসেজের Reply দিয়ে লিখুন:\n👉 সিয়াম ভাই তোমার পাসওয়ার্ড লেখ <পাসওয়ার্ড>\n\n⚠️ আপনার হাতে সময় আছে ১ মিনিট।",
+            (err, info) => {
+                global.GoatBot.onReply.set(info.messageID, {
+                    commandName: this.config.name,
+                    messageID: info.messageID,
+                    author: event.senderID,
+                    timestamp: Date.now()
+                });
+            }
+        );
+    },
+
+    onReply: async function ({ message, event, Reply, api }) {
+        if (event.senderID !== Reply.author) return;
+
+        let data = loadData();
+        const bodyText = event.body.trim();
+        const prefixText = "সিয়াম ভাই তোমার পাসওয়ার্ড লেখ";
+
+        if (Date.now() - Reply.timestamp > 60000) {
+            api.unsendMessage(Reply.messageID);
+            return message.reply("⏱️ সময় পার হয়ে গেছে! আবার কমান্ড দিন।");
+        }
+
+        if (!bodyText.startsWith(prefixText)) return;
+
+        const userAttempts = data.attempts[event.senderID] || 0;
+        if (userAttempts >= 3) {
+            return message.reply("🚫 আপনি ৩ বার ভুল পাসওয়ার্ড দিয়েছেন! আপনার এক্সেস ব্লক করা হয়েছে। রিসেট করতে কম্যান্ড দিন: ,alllist reset");
+        }
+
+        const inputPassword = bodyText.replace(prefixText, "").trim();
+
+        try {
+            api.unsendMessage(event.messageID);
+        } catch (e) {}
+
+        if (!inputPassword) {
+            return message.reply("❌ কোনো পাসওয়ার্ড পাওয়া যায়নি!");
+        }
+
+        if (data.used.includes(inputPassword)) {
+            data.attempts[event.senderID] = userAttempts + 1;
+            saveData(data);
+            return message.reply(`❌ এই পাসওয়ার্ডটি ইতোমধ্যে ব্যবহৃত! (ভুল চেষ্টা: ${userAttempts + 1}/3)`);
+        }
+
+        if (!data.passwords.includes(inputPassword)) {
+            data.attempts[event.senderID] = userAttempts + 1;
+            saveData(data);
+            return message.reply(`❌ ভুল পাসওয়ার্ড! (ভুল চেষ্টা: ${userAttempts + 1}/3)`);
+        }
+
+        data.used.push(inputPassword);
+        data.attempts[event.senderID] = 0;
+        saveData(data);
+
+        api.unsendMessage(Reply.messageID);
 
         const infoText = `────────────────
 📊 ALL COMMANDS & BOT INFO LIST
@@ -63,8 +171,16 @@ module.exports = {
 
 ℹ️ INFO & ECONOMY
 ┖ age 5/05/209 • ,userinfo • balance
+» 😌fork
+https://github.com/siyam-officialpfo/bot.git
 ────────────────`;
 
-        return message.reply(infoText);
+        return message.reply(infoText, (err, info) => {
+            if (!err) {
+                setTimeout(() => {
+                    api.unsendMessage(info.messageID);
+                }, 10000);
+            }
+        });
     }
 };
